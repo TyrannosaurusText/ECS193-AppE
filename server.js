@@ -216,6 +216,54 @@ app.post('/fetch/readings', function (req, res, next) {
     }
 });
 
+/**
+*   This site takes a POST request for the readings for the id specified in the 'id' property of the request body.
+*   example post body: {id: 1234}
+**/
+app.post('/mobile/readings', function (req, res, next) {
+    if (!req.is('application/json'))
+        return next();
+
+    var hasProps = util.checkProperties(['authCode', 'id'], req.body);
+    if (!hasProps)
+        util.respond(res, 401, JSON.stringify({err: 'Bad Request'}));
+    else
+        Authenticator.getRequestor(knex, req, gotRequestor);
+
+    function gotRequestor (requestor)
+    {
+        if (requestor.hasOwnProperty('err'))
+        {
+            util.respond(res, 401, JSON.stringify({err: 'Bad Auth'}));
+            return;
+        }
+
+        if (requestor.accType == 'admin')
+        {
+            util.respond(res, 401, JSON.stringify({err: 'Bad Credentials'}));
+            return;
+        }
+
+        knex('patients')
+            .select()
+            .where('id', req.body.id)
+            .then((rows) => {
+                if (rows.length == 1)
+                {
+                    if (requestor.accType != 'patient')
+                    {
+                        if (rows[0].doctorEmail == requestor.email)
+                            FetchRequestHandler.fetchReadingsLimited(knex, req, res);
+                        else
+                            util.respond(res, 401, JSON.stringify({err: 'Bad Credentials'}));
+                    }
+                }
+                else
+                    util.respond(res, 400, JSON.stringify({err: 'Bad ID'}));
+            });
+    }
+});
+
 
 //INSERTS
 
@@ -272,28 +320,21 @@ app.post('/insert/reading', function (req, res, next) {
     } 
 });
 
-
-
-
-//INSERTS
-
 /**
- *  This site processes a post request and inserts patient reading information into the reading table.
+ *  This site processes a post request and changes doctor for patient in databse.
  *  example post body:
  * {
  *   authCode: ****,
  *   id: 0,
- *   readings: [
- *     {timestamp: ****, channels: [0, 1, 2, 3, 4, ..., 63]},
- *     {...}
- *   ]
+ *   doctor email: **** 
+ *   
  * }
  */
 app.post('/transfer/patient', function (req, res, next) {
     if(!req.is('application/json'))
         return next();
     
-    var hasProps = util.checkProperties(['authCode', 'id', 'doctor'], req.body);
+    var hasProps = util.checkProperties(['authCode', 'id', 'destination'], req.body);
     if (!hasProps)
         util.respond(res, 401, JSON.stringify({err: 'Bad Request'}));
     else
@@ -307,33 +348,15 @@ app.post('/transfer/patient', function (req, res, next) {
             return;
         }
 
-        if ( requestor.accType == 'admin' && requestor.accType == 'adminDoctor')
+        if (requestor.accType == 'admin' || requestor.accType == 'adminDoctor')
         {
-            if(res.body.doctorEmail == '') //retire
-            {
-                knex('patients')
+            knex('patients')
                 .select()
                 .where('id', req.body.id)
-                .update({'doctorEmail': ''})
-                .then(() => {});    
-            }
-            else {
-                knex('faculty')
-                .select()
-                .where('doctorEmail', res.body.doctorEmail)
-                .then( (rows) =>{
-                    if(row.length == 1)
-                    {
-                        knex('patients')
-                        .select()
-                        .where('id', req.body.id)
-                        .update({'doctorEmail': res.body.doctorEmail})
-                        .then(() => {
-                            util.respond(res, 200, JSON.stringify({"OK":200}));
-                        });    
-                    }
+                .update('doctorEmail', req.body.destination)
+                .then(() => {
+                    util.respond(res, 401, JSON.stringify({body: 'Transfer Successful'}));
                 });
-            }
         }
         else{
             util.respond(res, 401, JSON.stringify({err: 'Bad Credentials'}));
@@ -344,19 +367,56 @@ app.post('/transfer/patient', function (req, res, next) {
     } 
 });
 
-//TOKENS -OLD
-
-/*
-app.post('/check/token', jsonParser, function (req, res, next) {
-    if(!req.is('application/json'))
+app.post('/remove/patient', function (req, res, next) {
+    if (!req.is('application/json'))
         return next();
-    Authenticator.checkUserExists(knex, req, res);
-});
+    
+    var hasProps = util.checkProperties(['authCode', 'id'], req.body);
+    if (!hasProps)
+        util.respond(res, 401, JSON.stringify({err: 'Bad Request'}));
+    else
+        Authenticator.getRequestor(knex, req, gotRequestor);
+    
+    function gotRequestor (requestor)
+    {
+        if (requestor.hasOwnProperty('err'))
+        {
+            util.respond(res, 401, JSON.stringify({err: 'Bad Auth'}));
+            return;
+        }
 
-app.post('/token/exchange', function (req, res, next) {
-    if(!req.is('application/json'))
-        return next();
-    Authenticator.exchangeAuthCode(knex, req, res);
+        if (requestor.accType == 'admin' || requestor.accType == 'adminDoctor')
+        {
+            knex('patients')
+                .select()
+                .where('id', req.body.id)
+                .then((rows) => {
+                    if (rows.length > 0)
+                    {
+                        var pat = rows[0];
+                        if (pat.doctorEmail == '')
+                        {
+                            knex('patients')
+                                .where('id', req.body.id)
+                                .del()
+                                .then(() => {});
+                            knex.schema
+                                .dropTableIfExists('patient_' + req.body.id)
+                                .then(() => {});
+                            util.respond(res, 200, JSON.stringify({body: 'Remove Success'}));
+                        }
+                        else
+                            util.respond(res, 400, JSON.stringify({err: 'Cannot remove assigned patient. Unassign then try again.'}));
+                    }
+                    else
+                        util.respond(res, 400, JSON.stringify({err: 'Bad id'}));
+                });
+        }
+        else{
+            util.respond(res, 401, JSON.stringify({err: 'Bad Credentials'}));
+            return;
+        }
+    }
 });
 */
 
